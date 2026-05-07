@@ -152,7 +152,7 @@ resource "aws_eks_node_group" "this" {
   node_role_arn   = aws_iam_role.node_group.arn
   subnet_ids      = var.subnet_ids
   instance_types  = each.value.instance_types
-  capacity_type   = each.value.capacity_type  # ON_DEMAND or SPOT
+  capacity_type   = each.value.capacity_type # ON_DEMAND or SPOT
 
   scaling_config {
     desired_size = each.value.desired_size
@@ -206,24 +206,76 @@ resource "aws_security_group" "cluster" {
 }
 
 ################################################################################
+# IAM role for EBS CSI driver (required for the addon to manage volumes)
+################################################################################
+
+data "aws_iam_policy_document" "ebs_csi_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.this.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_iam_openid_connect_provider.this.url, "https://", "")}:sub"
+      values   = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_iam_openid_connect_provider.this.url, "https://", "")}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ebs_csi" {
+  name               = "${var.cluster_name}-ebs-csi-driver"
+  assume_role_policy = data.aws_iam_policy_document.ebs_csi_assume.json
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+################################################################################
 # EKS Managed Add-ons
 ################################################################################
 
 resource "aws_eks_addon" "addons" {
   for_each = {
-    "vpc-cni"            = { version = "latest" }
-    "coredns"            = { version = "latest" }
-    "kube-proxy"         = { version = "latest" }
-    "aws-ebs-csi-driver" = { version = "latest" }
+    "vpc-cni"    = { service_account_role_arn = null }
+    "coredns"    = { service_account_role_arn = null }
+    "kube-proxy" = { service_account_role_arn = null }
+    "aws-ebs-csi-driver" = {
+      service_account_role_arn = aws_iam_role.ebs_csi.arn
+    }
   }
 
-  cluster_name             = aws_eks_cluster.this.name
-  addon_name               = each.key
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = each.key
+  service_account_role_arn    = each.value.service_account_role_arn
   resolve_conflicts_on_update = "OVERWRITE"
+
+  # addon_version omitted — AWS picks the default version for your k8s version
+  # Do NOT use "latest" — it is not a valid value and causes timeout errors
 
   tags = local.tags
 
-  depends_on = [aws_eks_node_group.this]
+  # Must wait for nodes to be Ready — add-on pods need somewhere to schedule
+  depends_on = [
+    aws_eks_node_group.this,
+    aws_iam_role_policy_attachment.ebs_csi,
+  ]
+
+  timeouts {
+    create = "30m" # default 20m is too short for EBS CSI — extend to 30m
+    update = "30m"
+    delete = "30m"
+  }
 }
 
 ################################################################################
@@ -249,5 +301,6 @@ resource "kubernetes_config_map_v1_data" "aws_auth" {
 
   force = true
 
-  depends_on = [aws_eks_cluster.this]
+  # Must wait for node groups — aws-auth only exists after first node joins
+  depends_on = [aws_eks_node_group.this]
 }
