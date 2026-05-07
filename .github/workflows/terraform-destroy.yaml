@@ -1,0 +1,287 @@
+################################################################################
+# GitHub Actions — Destroy EKS Platform
+#
+# Triggered manually (workflow_dispatch) — destroys everything in correct order.
+# WARNING: This is irreversible. All data will be lost.
+#
+# Usage:
+#   GitHub UI → Actions → Destroy EKS Platform → Run workflow → select env
+################################################################################
+name: Destroy EKS Platform
+
+on:
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: "Environment to destroy (dev / staging / prod)"
+                required: true
+                default: "dev"
+                type: choice
+                options:
+                    - dev
+                    - staging
+                    - prod
+            confirm:
+                description: "Type DESTROY to confirm — this is irreversible"
+                required: true
+                default: ""
+            delete_state_bucket:
+                description: "Also delete S3 state bucket and DynamoDB lock table?"
+                required: true
+                default: "false"
+                type: choice
+                options:
+                    - "false"
+                    - "true"
+
+permissions:
+    id-token: write
+    contents: read
+
+env:
+    AWS_REGION: ap-southeast-1
+    CLUSTER_NAME: eks-gitops-${{ github.event.inputs.environment }}
+
+jobs:
+    validate:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Validate confirmation input
+              run: |
+                  if [ "${{ github.event.inputs.confirm }}" != "DESTROY" ]; then
+                    echo "ERROR: You must type DESTROY in the confirm field"
+                    echo "You typed: ${{ github.event.inputs.confirm }}"
+                    exit 1
+                  fi
+                  echo "Confirmation validated. Proceeding with destruction of ${{ env.CLUSTER_NAME }}"
+
+    destroy:
+        needs: validate
+        runs-on: ubuntu-latest
+        environment: ${{ github.event.inputs.environment }}-apply
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Configure AWS credentials (OIDC)
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+                  aws-region: ${{ env.AWS_REGION }}
+
+            - name: Install tools
+              run: |
+                  # kubectl
+                  curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                  chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+                  # helm
+                  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+                  # terraform
+                  wget -q https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+                  unzip -q terraform_1.7.5_linux_amd64.zip
+                  sudo mv terraform /usr/local/bin/
+
+            - name: Update kubeconfig
+              run: |
+                  aws eks update-kubeconfig \
+                    --name ${{ env.CLUSTER_NAME }} \
+                    --region ${{ env.AWS_REGION }}
+              # If cluster is already gone, continue anyway
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 1 — Delete ArgoCD Applications (lets controllers clean up AWS)
+            ##########################################################################
+            - name: Step 1 — Delete all ArgoCD Applications
+              run: |
+                  echo "==> Deleting ArgoCD Applications (triggers AWS resource cleanup)"
+
+                  # Delete child apps first (removes ALBs, DNS records, etc.)
+                  kubectl delete applications --all -n argocd \
+                    --timeout=300s 2>/dev/null || true
+
+                  echo "Waiting 60s for controllers to clean up AWS resources..."
+                  echo "(ALB controller deletes ALBs, external-dns removes Route53 records)"
+                  sleep 60
+
+                  # Verify ALBs are gone
+                  echo "==> Checking for orphaned ALBs..."
+                  aws elbv2 describe-load-balancers \
+                    --query "LoadBalancers[?contains(LoadBalancerName, 'k8s')].[LoadBalancerName,State.Code]" \
+                    --output table 2>/dev/null || true
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 2 — Remove any remaining AWS resources created by controllers
+            ##########################################################################
+            - name: Step 2 — Clean up orphaned ALBs (if any remain)
+              run: |
+                  echo "==> Removing any ALBs still tagged with cluster name..."
+
+                  # Find ALBs tagged with our cluster
+                  ALB_ARNS=$(aws elbv2 describe-load-balancers \
+                    --query "LoadBalancers[*].LoadBalancerArn" \
+                    --output text 2>/dev/null || echo "")
+
+                  for ARN in $ALB_ARNS; do
+                    TAGS=$(aws elbv2 describe-tags \
+                      --resource-arns $ARN \
+                      --query "TagDescriptions[0].Tags[?Key=='kubernetes.io/cluster/${{ env.CLUSTER_NAME }}'].Value" \
+                      --output text 2>/dev/null || echo "")
+
+                    if [ -n "$TAGS" ]; then
+                      echo "Deleting ALB: $ARN"
+                      aws elbv2 delete-load-balancer --load-balancer-arn $ARN
+                    fi
+                  done
+
+                  # Wait for ALBs to finish deleting
+                  sleep 30
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 3 — Uninstall ArgoCD
+            ##########################################################################
+            - name: Step 3 — Uninstall ArgoCD
+              run: |
+                  echo "==> Uninstalling ArgoCD..."
+                  helm uninstall argocd -n argocd --timeout 5m 2>/dev/null || true
+                  kubectl delete namespace argocd --timeout=120s 2>/dev/null || true
+                  echo "ArgoCD removed"
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 4 — Remove EKS Access Entry (avoids Terraform conflict)
+            ##########################################################################
+            - name: Step 4 — Remove EKS access entries
+              run: |
+                  echo "==> Removing EKS access entries..."
+
+                  ENTRIES=$(aws eks list-access-entries \
+                    --cluster-name ${{ env.CLUSTER_NAME }} \
+                    --query "accessEntries[]" \
+                    --output text 2>/dev/null || echo "")
+
+                  for ENTRY in $ENTRIES; do
+                    echo "Removing access entry: $ENTRY"
+                    aws eks delete-access-entry \
+                      --cluster-name ${{ env.CLUSTER_NAME }} \
+                      --principal-arn $ENTRY 2>/dev/null || true
+                  done
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 5 — Terraform destroy
+            ##########################################################################
+            - name: Step 5 — Terraform destroy
+              working-directory: terraform/envs/${{ github.event.inputs.environment }}
+              run: |
+                  echo "==> Running terraform init..."
+                  terraform init -input=false
+
+                  echo "==> Running terraform destroy..."
+                  terraform destroy \
+                    -auto-approve \
+                    -input=false
+              # If partial failure, run again to catch remaining resources
+              continue-on-error: true
+
+            - name: Step 5b — Terraform destroy retry (catch stragglers)
+              working-directory: terraform/envs/${{ github.event.inputs.environment }}
+              run: |
+                  echo "==> Retry terraform destroy for any remaining resources..."
+                  terraform destroy \
+                    -auto-approve \
+                    -input=false
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 6 — Clean up security groups (ALB controller orphans these)
+            ##########################################################################
+            - name: Step 6 — Delete orphaned security groups
+              run: |
+                  echo "==> Checking for orphaned security groups from ALB controller..."
+
+                  # Find SGs tagged with our cluster
+                  SG_IDS=$(aws ec2 describe-security-groups \
+                    --filters "Name=tag-key,Values=kubernetes.io/cluster/${{ env.CLUSTER_NAME }}" \
+                    --query "SecurityGroups[*].GroupId" \
+                    --output text 2>/dev/null || echo "")
+
+                  for SG_ID in $SG_IDS; do
+                    echo "Deleting security group: $SG_ID"
+                    aws ec2 delete-security-group --group-id $SG_ID 2>/dev/null || true
+                  done
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 7 — Optionally delete S3 state bucket + DynamoDB table
+            ##########################################################################
+            - name: Step 7 — Delete state backend (optional)
+              if: github.event.inputs.delete_state_bucket == 'true'
+              run: |
+                  BUCKET="eks-gitops-tfstate-${{ github.event.inputs.environment }}"
+                  LOCK_TABLE="eks-gitops-tfstate-lock"
+
+                  echo "==> Emptying S3 bucket: $BUCKET"
+                  # Must empty bucket (including versions) before deleting
+                  aws s3api delete-objects \
+                    --bucket $BUCKET \
+                    --delete "$(aws s3api list-object-versions \
+                      --bucket $BUCKET \
+                      --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+                      --output json 2>/dev/null)" 2>/dev/null || true
+
+                  aws s3api delete-objects \
+                    --bucket $BUCKET \
+                    --delete "$(aws s3api list-object-versions \
+                      --bucket $BUCKET \
+                      --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' \
+                      --output json 2>/dev/null)" 2>/dev/null || true
+
+                  aws s3 rb s3://$BUCKET --force 2>/dev/null || true
+                  echo "S3 bucket deleted: $BUCKET"
+
+                  echo "==> Deleting DynamoDB lock table: $LOCK_TABLE"
+                  aws dynamodb delete-table \
+                    --table-name $LOCK_TABLE \
+                    --region ${{ env.AWS_REGION }} 2>/dev/null || true
+                  echo "DynamoDB table deleted: $LOCK_TABLE"
+              continue-on-error: true
+
+            ##########################################################################
+            # STEP 8 — Final verification
+            ##########################################################################
+            - name: Step 8 — Verify destruction
+              run: |
+                  echo ""
+                  echo "================================================="
+                  echo " Destruction complete — verifying..."
+                  echo "================================================="
+                  echo ""
+
+                  echo "==> EKS clusters remaining:"
+                  aws eks list-clusters \
+                    --query "clusters[?contains(@, 'eks-gitops')]" \
+                    --output table 2>/dev/null || echo "none"
+
+                  echo ""
+                  echo "==> VPCs with cluster tag remaining:"
+                  aws ec2 describe-vpcs \
+                    --filters "Name=tag:Project,Values=eks-gitops-platform" \
+                    --query "Vpcs[*].{VpcId:VpcId,Name:Tags[?Key=='Name']|[0].Value}" \
+                    --output table 2>/dev/null || echo "none"
+
+                  echo ""
+                  echo "==> ALBs remaining:"
+                  aws elbv2 describe-load-balancers \
+                    --query "LoadBalancers[?contains(LoadBalancerName,'k8s')].[LoadBalancerName]" \
+                    --output table 2>/dev/null || echo "none"
+
+                  echo ""
+                  echo "================================================="
+                  echo " Done. Check AWS Cost Explorer in 24h to confirm."
+                  echo "================================================="
