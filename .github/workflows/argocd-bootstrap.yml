@@ -1,0 +1,135 @@
+################################################################################
+# GitHub Actions — ArgoCD Bootstrap
+#
+# Triggered manually (workflow_dispatch) — run ONCE per new cluster.
+# After this runs, ArgoCD manages itself and everything else via GitOps.
+#
+# Usage:
+#   GitHub UI → Actions → Bootstrap ArgoCD → Run workflow → select env
+################################################################################
+name: Bootstrap ArgoCD
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to bootstrap (dev / staging / prod)"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      argocd_version:
+        description: "ArgoCD Helm chart version"
+        required: true
+        default: "7.3.4"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-1
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}-apply
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install tools
+        run: |
+          # kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+          # helm
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name eks-gitops-${{ github.event.inputs.environment }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Add ArgoCD Helm repo
+        run: |
+          helm repo add argo https://argoproj.github.io/argo-helm
+          helm repo update
+
+      - name: Install ArgoCD via Helm
+        run: |
+          helm upgrade --install argocd argo/argo-cd \
+            --namespace argocd \
+            --create-namespace \
+            --version ${{ github.event.inputs.argocd_version }} \
+            --set configs.params."server\.insecure"=true \
+            --set server.service.type=ClusterIP \
+            --wait \
+            --timeout 10m
+
+      - name: Wait for ArgoCD to be ready
+        run: |
+          kubectl rollout status deployment/argocd-server \
+            -n argocd \
+            --timeout=300s
+
+      - name: Register Git repository secret with ArgoCD
+        run: |
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: eks-gitops-repo
+            namespace: argocd
+            labels:
+              argocd.argoproj.io/secret-type: repository
+          type: Opaque
+          stringData:
+            type: git
+            url: https://github.com/${{ github.repository }}
+          EOF
+
+      - name: Apply App-of-Apps for environment
+        run: |
+          # Substitute the env name into the app-of-apps manifest
+          sed "s|\$ENV_NAME|${{ github.event.inputs.environment }}|g" \
+            argocd/app-of-apps.yaml | kubectl apply -f -
+
+      - name: Wait for App-of-Apps to sync
+        run: |
+          echo "Waiting 30s for ArgoCD to discover child apps..."
+          sleep 30
+
+          # Check app-of-apps status
+          kubectl get application app-of-apps -n argocd
+
+      - name: Print ArgoCD admin password
+        run: |
+          echo "================================================"
+          echo "ArgoCD bootstrap complete!"
+          echo "================================================"
+          echo ""
+          echo "Initial admin password:"
+          kubectl get secret argocd-initial-admin-secret \
+            -n argocd \
+            -o jsonpath='{.data.password}' | base64 -d
+          echo ""
+          echo ""
+          echo "Access ArgoCD via port-forward:"
+          echo "  kubectl port-forward svc/argocd-server -n argocd 8080:443"
+          echo "  Then open: http://localhost:8080"
+          echo "  Username: admin"
+          echo "================================================"
+          echo "IMPORTANT: Change this password immediately!"
