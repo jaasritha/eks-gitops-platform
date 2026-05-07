@@ -75,6 +75,7 @@ terraform output -json > /tmp/tf-outputs-dev.json
 ```
 
 **What gets created:**
+
 - VPC with 3 private + 3 public subnets across AZs
 - EKS 1.30 cluster with SPOT node group (t3.medium, 2 nodes)
 - OIDC provider for IRSA
@@ -103,10 +104,11 @@ argocd app list
 ```
 
 **Sync wave order (ArgoCD deploys in this sequence):**
+
 1. Wave -2: `cert-manager` (CRDs must be present before other charts)
 2. Wave -1: `aws-load-balancer-controller`
-3. Wave  0: `external-dns`, `cluster-autoscaler`
-4. Wave  5: `monitoring-stack` (Prometheus, Grafana, Loki)
+3. Wave 0: `external-dns`, `cluster-autoscaler`
+4. Wave 5: `monitoring-stack` (Prometheus, Grafana, Loki)
 5. Wave 10: `platform-apps` ApplicationSet (your microservices)
 
 ---
@@ -200,16 +202,16 @@ EOF
 
 ## Key Design Decisions
 
-| Decision | Choice | Why |
-|---|---|---|
-| State backend | S3 + DynamoDB | Standard; locking prevents concurrent apply |
-| IRSA over node IAM | ✅ Always | Per-pod least-privilege; no credential sprawl |
-| single_nat_gateway | true in dev, false in prod | Cost vs HA tradeoff |
-| ArgoCD sync mode | automated + selfHeal | Drift detection in prod; manual override still possible |
-| Sync waves | -2 → 10 | CRDs before controllers; controllers before apps |
-| Image tags | pinned in prod, latest in dev | Reproducibility in prod; speed in dev |
-| HPA metrics | CPU + Memory | Both needed; CPU alone misses memory-bound services |
-| PDB | prod only | Prevent all-pods eviction during node upgrades |
+| Decision           | Choice                        | Why                                                     |
+| ------------------ | ----------------------------- | ------------------------------------------------------- |
+| State backend      | S3 + DynamoDB                 | Standard; locking prevents concurrent apply             |
+| IRSA over node IAM | ✅ Always                     | Per-pod least-privilege; no credential sprawl           |
+| single_nat_gateway | true in dev, false in prod    | Cost vs HA tradeoff                                     |
+| ArgoCD sync mode   | automated + selfHeal          | Drift detection in prod; manual override still possible |
+| Sync waves         | -2 → 10                       | CRDs before controllers; controllers before apps        |
+| Image tags         | pinned in prod, latest in dev | Reproducibility in prod; speed in dev                   |
+| HPA metrics        | CPU + Memory                  | Both needed; CPU alone misses memory-bound services     |
+| PDB                | prod only                     | Prevent all-pods eviction during node upgrades          |
 
 ---
 
@@ -237,7 +239,7 @@ argocd app rollback <app-name> <revision-number>
 
 ## Repository Checklist Before Going to Prod
 
-- [ ] Replace all `ACCOUNT_ID`, `your-org`, `example.com` placeholders
+- [ ] Replace all `ACCOUNT_ID`, `jaasritha`, `example.com` placeholders
 - [ ] Set up GitHub environment protection rules for `prod-apply`
 - [ ] Store secrets in AWS Secrets Manager + External Secrets Operator
 - [ ] Enable S3 bucket versioning + MFA delete on Terraform state buckets

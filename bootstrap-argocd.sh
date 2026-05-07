@@ -62,7 +62,7 @@ metadata:
 type: Opaque
 stringData:
   type: git
-  url: https://github.com/your-org/eks-gitops-platform   # replace
+  url: https://github.com/jaasritha/eks-gitops-platform   # replace
   # For private repos, use SSH key or GitHub App credentials:
   # sshPrivateKey: |
   #   -----BEGIN OPENSSH PRIVATE KEY-----

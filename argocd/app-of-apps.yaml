@@ -18,7 +18,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/your-org/eks-gitops-platform   # replace
+    repoURL: https://github.com/jaasritha/eks-gitops-platform   # replace
     targetRevision: HEAD
     path: clusters/$ENV_NAME/argocd-apps                        # replace $ENV_NAME at bootstrap
   destination:

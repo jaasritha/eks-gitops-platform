@@ -60,7 +60,7 @@ spec:
         - name: clusterName
           value: eks-gitops-prod
         - name: serviceAccount.annotations.eks\.amazonaws\.com/role-arn
-          value: arn:aws:iam::ACCOUNT_ID:role/eks-gitops-prod-alb-controller  # replace
+          value: arn:aws:iam::AWS_ACCOUNT:role/eks-gitops-prod-alb-controller  # replace
         - name: replicaCount
           value: "3"
         - name: podDisruptionBudget.maxUnavailable
@@ -92,7 +92,7 @@ spec:
     helm:
       parameters:
         - name: serviceAccount.annotations.eks\.amazonaws\.com/role-arn
-          value: arn:aws:iam::ACCOUNT_ID:role/eks-gitops-prod-external-dns  # replace
+          value: arn:aws:iam::AWS_ACCOUNT:role/eks-gitops-prod-external-dns  # replace
         - name: txtOwnerId
           value: eks-gitops-prod
         - name: domainFilters[0]
@@ -130,7 +130,7 @@ spec:
         - name: awsRegion
           value: ap-southeast-1
         - name: rbac.serviceAccount.annotations.eks\.amazonaws\.com/role-arn
-          value: arn:aws:iam::ACCOUNT_ID:role/eks-gitops-prod-cluster-autoscaler  # replace
+          value: arn:aws:iam::AWS_ACCOUNT:role/eks-gitops-prod-cluster-autoscaler  # replace
         - name: extraArgs.scale-down-delay-after-add
           value: "10m"
         - name: extraArgs.scale-down-unneeded-time
@@ -156,7 +156,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/your-org/eks-gitops-platform
+    repoURL: https://github.com/jaasritha/eks-gitops-platform
     targetRevision: HEAD
     path: helm-charts/monitoring
     helm:
@@ -188,7 +188,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/your-org/eks-gitops-platform
+    repoURL: https://github.com/jaasritha/eks-gitops-platform
     targetRevision: HEAD
     path: argocd
     directory:

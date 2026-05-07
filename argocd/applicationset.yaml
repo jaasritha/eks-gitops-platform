@@ -28,7 +28,7 @@ spec:
 
           # Generator 2: apps discovered from apps/ directory
           - git:
-              repoURL: https://github.com/your-org/eks-gitops-platform
+              repoURL: https://github.com/jaasritha/eks-gitops-platform
               revision: HEAD
               directories:
                 - path: apps/*
@@ -41,7 +41,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/your-org/eks-gitops-platform
+        repoURL: https://github.com/jaasritha/eks-gitops-platform
         targetRevision: HEAD
         path: "helm-charts/base-app"
         helm:
