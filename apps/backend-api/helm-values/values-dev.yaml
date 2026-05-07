@@ -1,0 +1,73 @@
+################################################################################
+# backend-api — dev environment values
+################################################################################
+
+global:
+  env: dev
+  app: backend-api
+
+image:
+  repository: 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/backend-api  # replace
+  tag: "dev-latest"
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/eks-gitops-dev-backend-api  # replace
+
+service:
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+  hosts:
+    - host: backend-api.dev.example.com   # replace
+      paths:
+        - path: /api/
+          pathType: Prefix
+
+env:
+  - name: DB_SECRET_ARN
+    value: "arn:aws:secretsmanager:ap-southeast-1:ACCOUNT_ID:secret/dev/db-credentials"
+  - name: AWS_REGION
+    value: "ap-southeast-1"
+  - name: LOG_LEVEL
+    value: "DEBUG"
+
+probes:
+  liveness:
+    httpGet:
+      path: /health/live
+      port: 8080
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    failureThreshold: 3
+  readiness:
+    httpGet:
+      path: /health/ready
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3

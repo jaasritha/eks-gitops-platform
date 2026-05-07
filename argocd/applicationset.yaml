@@ -1,0 +1,71 @@
+################################################################################
+# ArgoCD ApplicationSet — Multi-environment app generator
+#
+# This generates one ArgoCD Application per app per environment,
+# reading values from apps/{app-name}/helm-values/values-{env}.yaml
+################################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform-apps
+  namespace: argocd
+spec:
+  generators:
+    - matrix:
+        generators:
+          # Generator 1: environments
+          - list:
+              elements:
+                - env: dev
+                  cluster: https://kubernetes.default.svc   # in-cluster
+                  namespace: app-dev
+                - env: staging
+                  cluster: https://eks-staging.example.com  # replace
+                  namespace: app-staging
+                - env: prod
+                  cluster: https://eks-prod.example.com     # replace
+                  namespace: app-prod
+
+          # Generator 2: apps discovered from apps/ directory
+          - git:
+              repoURL: https://github.com/your-org/eks-gitops-platform
+              revision: HEAD
+              directories:
+                - path: apps/*
+
+  template:
+    metadata:
+      name: "{{path.basename}}-{{env}}"
+      annotations:
+        argocd.argoproj.io/sync-wave: "10"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/your-org/eks-gitops-platform
+        targetRevision: HEAD
+        path: "helm-charts/base-app"
+        helm:
+          releaseName: "{{path.basename}}-{{env}}"
+          valueFiles:
+            - "../../apps/{{path.basename}}/helm-values/values-{{env}}.yaml"
+          parameters:
+            - name: global.env
+              value: "{{env}}"
+            - name: global.app
+              value: "{{path.basename}}"
+      destination:
+        server: "{{cluster}}"
+        namespace: "{{namespace}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 2m

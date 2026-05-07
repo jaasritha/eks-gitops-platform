@@ -1,0 +1,54 @@
+################################################################################
+# frontend — dev environment values
+################################################################################
+
+global:
+  env: dev
+  app: frontend
+
+image:
+  repository: 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/frontend  # replace
+  tag: "dev-latest"
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+serviceAccount:
+  create: true
+  annotations: {}   # no IRSA needed for frontend
+
+service:
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+  hosts:
+    - host: frontend.dev.example.com   # replace
+      paths:
+        - path: /
+          pathType: Prefix
+
+env:
+  - name: REACT_APP_API_URL
+    value: "http://backend-api.dev.example.com"
+  - name: NODE_ENV
+    value: "development"

@@ -1,0 +1,79 @@
+################################################################################
+# backend-api — prod environment values
+################################################################################
+
+global:
+  env: prod
+  app: backend-api
+
+image:
+  repository: 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/backend-api
+  tag: "v2.1.0"
+
+replicaCount: 3
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 30
+  targetCPUUtilizationPercentage: 65
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# IRSA — this SA can access S3 and DynamoDB via IAM role, no hardcoded creds
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/eks-gitops-prod-backend-api  # replace
+
+service:
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-southeast-1:ACCOUNT:certificate/xxx
+  hosts:
+    - host: api.example.com
+      paths:
+        - path: /api/
+          pathType: Prefix
+
+env:
+  - name: DB_SECRET_ARN
+    value: "arn:aws:secretsmanager:ap-southeast-1:ACCOUNT:secret/prod/db-credentials"
+  - name: AWS_REGION
+    value: "ap-southeast-1"
+  - name: LOG_LEVEL
+    value: "INFO"
+
+probes:
+  liveness:
+    httpGet:
+      path: /health/live
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    failureThreshold: 3
+  readiness:
+    httpGet:
+      path: /health/ready
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3

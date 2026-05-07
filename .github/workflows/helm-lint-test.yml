@@ -1,0 +1,67 @@
+################################################################################
+# GitHub Actions — Helm Lint + Template Test on PR
+################################################################################
+name: Helm Lint & Test
+
+on:
+  pull_request:
+    paths:
+      - 'helm-charts/**'
+      - 'apps/**/helm-values/**'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.4
+
+      - name: Helm lint — base-app chart
+        run: |
+          helm lint helm-charts/base-app \
+            -f apps/frontend/helm-values/values-dev.yaml \
+            --set global.app=frontend,global.env=dev
+
+      - name: Helm lint — monitoring chart
+        run: |
+          helm dependency update helm-charts/monitoring
+          helm lint helm-charts/monitoring -f helm-charts/monitoring/values-dev.yaml
+
+      - name: Helm template — render all app/env combinations
+        run: |
+          for app in apps/*/; do
+            APP=$(basename $app)
+            for values_file in $app/helm-values/values-*.yaml; do
+              ENV=$(basename $values_file .yaml | sed 's/values-//')
+              echo "--- Rendering $APP / $ENV ---"
+              helm template "$APP-$ENV" helm-charts/base-app \
+                -f "$values_file" \
+                --set global.app=$APP,global.env=$ENV \
+                > /tmp/rendered-$APP-$ENV.yaml
+              echo "OK"
+            done
+          done
+
+      - name: Validate rendered manifests with kubeval
+        run: |
+          wget -q https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar -xzf kubeval-linux-amd64.tar.gz
+          for f in /tmp/rendered-*.yaml; do
+            echo "Validating $f..."
+            ./kubeval --strict --ignore-missing-schemas "$f"
+          done
+
+      - name: Helm test (dry-run install)
+        run: |
+          helm install frontend-dev-test helm-charts/base-app \
+            -f apps/frontend/helm-values/values-dev.yaml \
+            --set global.app=frontend,global.env=dev \
+            --dry-run \
+            --generate-name
+          echo "Dry-run passed"

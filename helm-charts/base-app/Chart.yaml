@@ -1,0 +1,16 @@
+apiVersion: v2
+name: base-app
+description: |
+  Generic microservice Helm chart for the EKS GitOps Platform.
+  Supports Deployment, HPA, PDB, ServiceAccount (IRSA), Ingress (ALB), and ConfigMaps.
+  Override with per-environment values files.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - microservice
+  - platform
+  - eks
+  - gitops
+maintainers:
+  - name: platform-team

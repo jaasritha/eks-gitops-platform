@@ -1,0 +1,107 @@
+################################################################################
+# helm-charts/monitoring — prod values
+# HA configuration: Prometheus HA pair, Grafana HA, Alertmanager cluster
+################################################################################
+
+kube-prometheus-stack:
+  nameOverride: prometheus
+  fullnameOverride: prometheus
+
+  prometheus:
+    prometheusSpec:
+      replicas: 2                    # HA pair
+      retention: 30d
+      retentionSize: "50GB"
+      resources:
+        requests:
+          cpu: 500m
+          memory: 2Gi
+        limits:
+          cpu: 2000m
+          memory: 8Gi
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp3
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 100Gi
+      additionalScrapeConfigs:
+        - job_name: 'kubernetes-pods'
+          kubernetes_sd_configs:
+            - role: pod
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+              action: keep
+              regex: true
+            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+              action: replace
+              target_label: __metrics_path__
+              regex: (.+)
+
+  grafana:
+    enabled: true
+    replicas: 2
+    adminPassword: ""              # set via External Secrets Operator from Secrets Manager
+    persistence:
+      enabled: true
+      storageClassName: gp3
+      size: 10Gi
+    ingress:
+      enabled: true
+      ingressClassName: alb
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internet-facing
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+        alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-southeast-1:ACCOUNT:certificate/xxx
+      hosts:
+        - grafana.example.com    # replace
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+          - name: default
+            orgId: 1
+            folder: Platform
+            type: file
+            disableDeletion: true  # prevent dashboard deletion in prod UI
+            options:
+              path: /var/lib/grafana/dashboards/default
+    dashboardsConfigMaps:
+      default: grafana-dashboards
+
+  alertmanager:
+    alertmanagerSpec:
+      replicas: 3                  # Alertmanager cluster (odd number for quorum)
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      alertmanagerConfiguration:
+        name: alertmanager-config  # points to an AlertmanagerConfig CR
+
+  kubeEtcd:
+    enabled: false
+  kubeControllerManager:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+
+loki-stack:
+  loki:
+    enabled: true
+    persistence:
+      enabled: true
+      storageClassName: gp3
+      size: 100Gi
+    config:
+      limits_config:
+        retention_period: 720h     # 30 days in prod
+
+  promtail:
+    enabled: true
+    config:
+      clients:
+        - url: http://prometheus-loki:3100/loki/api/v1/push

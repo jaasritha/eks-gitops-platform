@@ -1,0 +1,60 @@
+################################################################################
+# frontend — staging environment values
+################################################################################
+
+global:
+  env: staging
+  app: frontend
+
+image:
+  repository: 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/frontend  # replace
+  tag: "v1.0.0-rc1"   # release candidate — pinned tag, never latest
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 384Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1   # allow 1 eviction during node drain
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+service:
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  hosts:
+    - host: frontend.staging.example.com   # replace
+      paths:
+        - path: /
+          pathType: Prefix
+
+env:
+  - name: REACT_APP_API_URL
+    value: "https://backend-api.staging.example.com"
+  - name: NODE_ENV
+    value: "staging"

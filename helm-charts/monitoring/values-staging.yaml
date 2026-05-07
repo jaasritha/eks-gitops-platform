@@ -1,0 +1,82 @@
+################################################################################
+# helm-charts/monitoring — staging values
+# Closer to prod config than dev, but smaller resource footprint
+################################################################################
+
+kube-prometheus-stack:
+  nameOverride: prometheus
+  fullnameOverride: prometheus
+
+  prometheus:
+    prometheusSpec:
+      retention: 14d
+      retentionSize: "15GB"
+      resources:
+        requests:
+          cpu: 300m
+          memory: 1Gi
+        limits:
+          cpu: 1500m
+          memory: 4Gi
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp3
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 50Gi
+      additionalScrapeConfigs:
+        - job_name: 'kubernetes-pods'
+          kubernetes_sd_configs:
+            - role: pod
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+              action: keep
+              regex: true
+
+  grafana:
+    enabled: true
+    adminPassword: "changeme-staging"  # replace with External Secrets in staging too
+    ingress:
+      enabled: true
+      ingressClassName: alb
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internet-facing
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+      hosts:
+        - grafana.staging.example.com   # replace
+    dashboardsConfigMaps:
+      default: grafana-dashboards
+
+  alertmanager:
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+  kubeEtcd:
+    enabled: false
+  kubeControllerManager:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+
+loki-stack:
+  loki:
+    enabled: true
+    persistence:
+      enabled: true
+      storageClassName: gp3
+      size: 30Gi
+    config:
+      limits_config:
+        retention_period: 336h     # 14 days
+
+  promtail:
+    enabled: true
+    config:
+      clients:
+        - url: http://prometheus-loki:3100/loki/api/v1/push

@@ -1,0 +1,78 @@
+################################################################################
+# backend-api — staging environment values
+################################################################################
+
+global:
+  env: staging
+  app: backend-api
+
+image:
+  repository: 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/backend-api  # replace
+  tag: "v2.1.0-rc1"
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 150m
+    memory: 192Mi
+  limits:
+    cpu: 750m
+    memory: 768Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 65
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/eks-gitops-staging-backend-api  # replace
+
+service:
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+  hosts:
+    - host: backend-api.staging.example.com   # replace
+      paths:
+        - path: /api/
+          pathType: Prefix
+
+env:
+  - name: DB_SECRET_ARN
+    value: "arn:aws:secretsmanager:ap-southeast-1:ACCOUNT_ID:secret/staging/db-credentials"
+  - name: AWS_REGION
+    value: "ap-southeast-1"
+  - name: LOG_LEVEL
+    value: "INFO"
+
+probes:
+  liveness:
+    httpGet:
+      path: /health/live
+      port: 8080
+    initialDelaySeconds: 20
+    periodSeconds: 30
+    failureThreshold: 3
+  readiness:
+    httpGet:
+      path: /health/ready
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3

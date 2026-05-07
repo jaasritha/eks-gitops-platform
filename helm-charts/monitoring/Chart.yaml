@@ -1,0 +1,13 @@
+apiVersion: v2
+name: monitoring
+description: Platform observability stack — kube-prometheus-stack + Loki
+type: application
+version: 0.1.0
+
+dependencies:
+  - name: kube-prometheus-stack
+    version: "58.x"
+    repository: https://prometheus-community.github.io/helm-charts
+  - name: loki-stack
+    version: "2.x"
+    repository: https://grafana.github.io/helm-charts
